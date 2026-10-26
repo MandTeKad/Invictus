@@ -35,7 +35,15 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug --stacktrace
+        run: gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-output.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build-output.log
+          retention-days: 3
 
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
