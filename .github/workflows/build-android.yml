@@ -45,11 +45,11 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          # Extract error lines and emit as GitHub annotations (visible via API)
-          ERRORS=$(grep -i 'e:.*error\|FAILURE\|Unresolved reference\|cannot find symbol\|Could not resolve' build-output.log | head -20 || true)
-          TAIL=$(tail -30 build-output.log || true)
-          echo "::error title=Build Errors::${ERRORS//$'\n'/%0A}"
-          echo "::error title=Build Tail::${TAIL//$'\n'/%0A}"
+          # Get the full relevant error (CheckAarMetadata, compile errors, etc.)
+          FULL_ERR=$(grep -B5 -A10 'CheckAarMetadata\|minCompileSdk\|requires compileSdk\|error:\|Unresolved reference' build-output.log | head -60 || true)
+          WHAT_WENT_WRONG=$(sed -n '/What went wrong/,/Try:/p' build-output.log | head -20 || true)
+          echo "::error title=What Went Wrong::${WHAT_WENT_WRONG//$'\n'/%0A}"
+          echo "::error title=Full Error Context::${FULL_ERR//$'\n'/%0A}"
 
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
