@@ -41,18 +41,15 @@ jobs:
           gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-output.log
           echo "BUILD_OK=true" >> "$GITHUB_ENV"
 
-      - name: Post build errors to summary
+      - name: Report build errors as annotations
         if: failure()
         shell: bash
         run: |
-          echo '## Build Errors' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -i -A2 'error\|FAILURE\|failed\|Unresolved\|cannot find' build-output.log | tail -80 >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo '## Last 40 lines' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -40 build-output.log >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # Extract error lines and emit as GitHub annotations (visible via API)
+          ERRORS=$(grep -i 'e:.*error\|FAILURE\|Unresolved reference\|cannot find symbol\|Could not resolve' build-output.log | head -20 || true)
+          TAIL=$(tail -30 build-output.log || true)
+          echo "::error title=Build Errors::${ERRORS//$'\n'/%0A}"
+          echo "::error title=Build Tail::${TAIL//$'\n'/%0A}"
 
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
