@@ -231,7 +231,7 @@ private fun InvictusMainScaffold(dao: TrainingDao) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("INVICTUS", color = gold, fontSize = 27.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.weight(1f))
-                Text("v0.1.2", color = muted)
+                Text("v0.1.3", color = muted)
             }
             when (tab) {
                 0 -> Dashboard(sets, weights, recoveries, onTrain = { tab = 1 })

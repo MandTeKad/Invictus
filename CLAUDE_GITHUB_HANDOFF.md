@@ -32,3 +32,10 @@ The user has a phone only right now, but owns a computer. They want a native And
 5. Allow installation from that source if prompted, then open Invictus.
 
 If a run fails, inspect logs and send the user an accurate error explanation, never a fabricated APK link.
+
+## v0.1.3 update: step tracking while app is closed
+- Rebuild and verify the new `androidx.health.connect:connect-client:1.1.0` dependency and `READ_STEPS` permission.
+- On a supported Android 14+/17 device, install APK, open Movement, tap Connect steps, approve access, close Invictus, walk, reopen and Refresh. Ensure daily aggregate includes steps after closure, subject to system batching.
+- If Health Connect permission request fails, follow current Android Health Connect manifest/rationale activity guidelines and repair the permission flow; don't claim tested functionality without device verification.
+- Retain fallback sensor behavior with honest 'foreground-only' labeling.
+- Build via `.github/workflows/build-android.yml`, fix compilation failures, and send user the successful Actions artifact link.

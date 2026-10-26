@@ -56,3 +56,12 @@ Future versions should split UI, domain and data into modules and add automated 
 
 ## GitHub Actions build (phone-only installation)
 This source includes `.github/workflows/build-android.yml`. Push this folder's **contents** to the root of a GitHub repository. Push to `main` or select Actions > Build Invictus APK > Run workflow. After a successful run, download the `Invictus-debug-APK` artifact and install the contained `app-debug.apk` on Android. See `CLAUDE_GITHUB_HANDOFF.md` for complete instructions. The debug build is for personal testing. No APK has been verified yet.
+
+## v0.1.3 — All-day step tracking
+- On supported Android 14+ devices with Health Connect on-device steps (SDK extension 20+), permission to read steps enables system-level collection even while Invictus is closed.
+- Movement screen now requests `READ_STEPS` through Health Connect and retrieves the daily aggregate on open/refresh, avoiding summation of duplicate sources. The user must grant access.
+- When Health Connect is unavailable, a clearly labeled foreground-only sensor fallback remains; it does **not** claim all-day coverage.
+- Daily calories still estimate **net walking activity above rest**, not precise calorie expenditure or TDEE.
+- Does not continuously refresh UI in background; reopening/refreshing reads the available cumulative daily total. Batching may delay recent steps.
+- If the aggregate remains zero, check Health Connect availability, permissions, and whether on-device tracking is supported and active. Do not assume no movement occurred.
+- This source is uncompiled in the current environment; use the GitHub Actions build and resolve any SDK/permission API build errors.

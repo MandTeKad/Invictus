@@ -14,6 +14,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import kotlinx.coroutines.launch
+import java.time.ZoneId
+import java.time.Instant
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -75,23 +84,68 @@ internal object ActivityCalories {
 internal fun ActivityTrackingScreen(weightLb: Double) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("invictus_activity_settings", Context.MODE_PRIVATE) }
     var factor by remember { mutableFloatStateOf(prefs.getFloat("walking_factor", 0.8f).coerceIn(0.6f, 1.2f)) }
     var steps by remember { mutableIntStateOf(0) }
-    val tracker = remember(context) { ForegroundStepTracker(context) { steps = it } }
+    var source by remember { mutableStateOf("Not connected") }
+    var error by remember { mutableStateOf("") }
+    var refreshing by remember { mutableStateOf(false) }
     var granted by remember {
         mutableStateOf(Build.VERSION.SDK_INT < 29 || context.checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED)
     }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
-    DisposableEffect(tracker, granted, lifecycle) {
-        steps = tracker.current()
+    val sensorTracker = remember(context) { ForegroundStepTracker(context) { reading ->
+        // The sensor fallback is only displayed if Health Connect isn't connected.
+        if (source != "Health Connect") steps = reading
+    } }
+    val healthAvailable = remember(context) {
+        runCatching { HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE }
+            .getOrDefault(false)
+    }
+    val client = remember(context, healthAvailable) {
+        if (healthAvailable) runCatching { HealthConnectClient.getOrCreate(context) }.getOrNull() else null
+    }
+    val readStepsPermission = remember { HealthPermission.getReadPermission(StepsRecord::class) }
+    val healthLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { permissions ->
+        if (readStepsPermission in permissions) {
+            scope.launch { refreshHealthSteps(client, readStepsPermission, onSteps = { steps = it; source = "Health Connect" }, onError = { error = it }) }
+        } else {
+            error = "Step access not granted. Enable Health Connect permission to read all-day totals."
+        }
+    }
+    val sensorPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        granted = it
+    }
+
+    fun refresh() {
+        if (client == null) return
+        scope.launch {
+            refreshing = true
+            refreshHealthSteps(client, readStepsPermission,
+                onSteps = { steps = it; source = "Health Connect"; error = "" },
+                onError = { error = it })
+            refreshing = false
+        }
+    }
+
+    DisposableEffect(sensorTracker, granted, lifecycle, client) {
+        if (client == null) {
+            steps = sensorTracker.current()
+            source = "Foreground sensor (partial)"
+        }
         val observer = LifecycleEventObserver { _, event ->
-            if (granted && event == Lifecycle.Event.ON_RESUME) tracker.start()
-            if (event == Lifecycle.Event.ON_PAUSE) tracker.stop()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (client != null) refresh() else if (granted) sensorTracker.start()
+            }
+            if (event == Lifecycle.Event.ON_PAUSE) sensorTracker.stop()
         }
         lifecycle.lifecycle.addObserver(observer)
-        if (granted && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) tracker.start()
-        onDispose { tracker.stop(); lifecycle.lifecycle.removeObserver(observer) }
+        if (lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            if (client != null) refresh() else if (granted) sensorTracker.start()
+        }
+        onDispose { sensorTracker.stop(); lifecycle.lifecycle.removeObserver(observer) }
     }
 
     val active = ActivityCalories.estimate(steps, 183.0, weightLb, factor.toDouble())
@@ -99,29 +153,69 @@ internal fun ActivityTrackingScreen(weightLb: Double) {
         Text("Movement", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("PHONE-SENSOR STEPS · TODAY", color = MaterialTheme.colorScheme.primary)
+                Text("STEPS · TODAY", color = MaterialTheme.colorScheme.primary)
                 Text(String.format(Locale.US, "%,d", steps), style = MaterialTheme.typography.headlineLarge)
-                when {
-                    !tracker.supported -> Text("This phone does not expose a step-counter sensor.")
-                    !granted -> Button(onClick = { permissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) }) { Text("Allow step tracking") }
-                    else -> Text("Partial count: recorded while Invictus is open and active. Steps while the app is closed are not included.")
+                Text("Source: $source")
+                if (client != null) {
+                    Text("Health Connect collects available on-device steps while Invictus is closed. Open this screen to refresh the daily aggregate.")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            scope.launch {
+                                val isGranted = runCatching { client.permissionController.getGrantedPermissions().contains(readStepsPermission) }.getOrDefault(false)
+                                if (isGranted) refresh() else healthLauncher.launch(setOf(readStepsPermission))
+                            }
+                        }) { Text("Connect steps") }
+                        OutlinedButton(onClick = { refresh() }, enabled = !refreshing) { Text(if (refreshing) "Loading" else "Refresh") }
+                    }
+                } else {
+                    Text("Health Connect unavailable: this fallback measures steps only while Invictus is open. All-day tracking requires Health Connect on a supported device.")
+                    if (!sensorTracker.supported) Text("This phone has no available step-counter sensor.")
+                    else if (!granted) Button(onClick = { sensorPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) }) { Text("Allow step sensor") }
                 }
+                if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
             }
         }
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("ESTIMATED WALKING CALORIES · ABOVE REST", color = MaterialTheme.colorScheme.primary)
                 Text("~$active kcal", style = MaterialTheme.typography.headlineMedium)
-                Text("Indicative range: ${max(0,(active*0.7).roundToInt())}–${(active*1.3).roundToInt()} kcal")
-                Text("These are estimates, not measured calories. Flat-ground walking only. Never add this figure to another app's activity total without checking for overlap.")
+                Text("Indicative range: ${max(0, (active * 0.7).roundToInt())}–${(active * 1.3).roundToInt()} kcal")
+                Text("Calories are modeled from steps, not measured. Flat-ground walking only. Do not double-count them with other workout totals.")
                 Text("Personal calibration: ${(factor * 100).roundToInt()}%")
                 Slider(value = factor, onValueChange = {
                     factor = it
                     prefs.edit().putFloat("walking_factor", it).apply()
                 }, valueRange = 0.6f..1.2f, steps = 11)
-                Text("Starts conservatively at 80%. This is NOT a proven universal 20% correction. Later versions will calibrate against food intake and multiweek weight trends, with uncertainty and manual review.")
+                Text("80% is a conservative starting setting, not a universal correction. Calorie estimates require long-term calibration.")
             }
         }
-        Text("This screen is an initial foreground sensor implementation. Planned: Health Connect daily aggregates for more complete steps, duplicate-source prevention, and calibrated total daily energy expenditure. No medical or calorie accuracy guarantee.", style = MaterialTheme.typography.bodySmall)
+        Text("Health Connect step counts may be batched, missing or delayed. Activity tracked by devices you aren't carrying cannot be inferred. This app is not a medical or laboratory-grade calorie monitor.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private suspend fun refreshHealthSteps(
+    client: HealthConnectClient?,
+    permission: String,
+    onSteps: (Int) -> Unit,
+    onError: (String) -> Unit
+) {
+    if (client == null) return
+    try {
+        if (permission !in client.permissionController.getGrantedPermissions()) {
+            onError("Health Connect step permission needed. Tap Connect steps.")
+            return
+        }
+        val today = LocalDate.now()
+        val start = today.atStartOfDay(ZoneId.systemDefault()).toInstant()
+        val end = Instant.now()
+        val response = client.aggregate(
+            AggregateRequest(
+                metrics = setOf(StepsRecord.COUNT_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(start, end)
+            )
+        )
+        onSteps((response[StepsRecord.COUNT_TOTAL] ?: 0L).coerceIn(0L, 200000L).toInt())
+    } catch (exception: Exception) {
+        onError("Couldn't read Health Connect steps: ${exception.message ?: "unknown error"}")
     }
 }
