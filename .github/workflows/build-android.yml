@@ -35,21 +35,7 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Build debug APK
-        shell: bash
-        run: |
-          set -o pipefail
-          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-output.log
-          echo "BUILD_OK=true" >> "$GITHUB_ENV"
-
-      - name: Report build errors as annotations
-        if: failure()
-        shell: bash
-        run: |
-          # Get the full relevant error (CheckAarMetadata, compile errors, etc.)
-          FULL_ERR=$(grep -B5 -A10 'CheckAarMetadata\|minCompileSdk\|requires compileSdk\|error:\|Unresolved reference' build-output.log | head -60 || true)
-          WHAT_WENT_WRONG=$(sed -n '/What went wrong/,/Try:/p' build-output.log | head -20 || true)
-          echo "::error title=What Went Wrong::${WHAT_WENT_WRONG//$'\n'/%0A}"
-          echo "::error title=Full Error Context::${FULL_ERR//$'\n'/%0A}"
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
