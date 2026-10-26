@@ -285,6 +285,13 @@ private fun CommandScreen(
         CardLabel("Current Status")
         StatusRow("Logged sets", sets.size.toString())
         StatusRow("Completed sessions", sessions.count { it.status == "finished" }.toString())
+        val lastSession = sessions.firstOrNull { it.status == "finished" }
+        if (lastSession != null) {
+            StatusRow("Last mode", lastSession.trainingMode.ifEmpty { "HYBRID" })
+            if (lastSession.equipmentProfile.isNotEmpty()) {
+                StatusRow("Last equipment", lastSession.equipmentProfile)
+            }
+        }
         StatusRow("Recovery", latestRecovery?.let {
             RecoveryAdvice.suggest(it.sleepHours, it.fatigue, it.steps, it.pain)
         } ?: "Not entered")
@@ -386,13 +393,75 @@ private fun ForgeScreen(
 ) {
     ScreenTitle("Forge", "Log a real workout — nothing is auto-completed")
 
+    // Training mode and equipment profile state
+    var trainingMode by remember { mutableStateOf(TrainingMode.DEFAULT) }
+    var equipmentProfile by remember { mutableStateOf(EquipmentProfile.TREX_FULL_GYM) }
+
+    // Mode selector
+    InvCard {
+        CardLabel("Training Mode")
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TrainingMode.entries.forEach { mode ->
+                val selected = trainingMode == mode
+                if (selected) {
+                    InvButton(
+                        text = mode.label,
+                        onClick = {},
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    InvOutlinedButton(
+                        text = mode.label,
+                        onClick = { trainingMode = mode },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // Equipment profile selector
+        var eqExpanded by remember { mutableStateOf(false) }
+        Spacer(Modifier.height(6.dp))
+        ExposedDropdownMenuBox(expanded = eqExpanded, onExpandedChange = { eqExpanded = it }) {
+            InvField(
+                value = equipmentProfile.name,
+                onValueChange = {},
+                label = "Equipment",
+                modifier = Modifier.fillMaxWidth().menuAnchor()
+            )
+            ExposedDropdownMenu(
+                expanded = eqExpanded,
+                onDismissRequest = { eqExpanded = false },
+                containerColor = Inv.CardElevated
+            ) {
+                EquipmentProfile.PRESETS.forEach { preset ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(preset.name, color = Inv.TextPrimary, fontSize = 14.sp)
+                                Text(preset.description, color = Inv.TextTertiary, fontSize = 11.sp)
+                            }
+                        },
+                        onClick = { equipmentProfile = preset; eqExpanded = false }
+                    )
+                }
+            }
+        }
+        if (equipmentProfile.notes.isNotEmpty()) {
+            Text(equipmentProfile.notes, color = Inv.TextTertiary, fontSize = 11.sp)
+        }
+    }
+
     // Session controls
     InvCard(goldBorder = activeSession != null) {
         CardLabel(if (activeSession != null) "Session Active" else "Session")
         if (activeSession != null) {
             val elapsed = (System.currentTimeMillis() - activeSession.startedAt) / 60000
             Text(
-                "${activeSession.day} · ${elapsed} min",
+                "${activeSession.day} · ${elapsed} min · ${trainingMode.label}",
                 color = Inv.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium
             )
             Text(
@@ -426,8 +495,16 @@ private fun ForgeScreen(
             Text("No active session", color = Inv.TextTertiary, fontSize = 13.sp)
             InvButton(text = "Start Session", onClick = {
                 scope.launch {
-                    val id = dao.insertSession(WorkoutSession(day = selectedDay))
-                    onSessionChange(WorkoutSession(id = id, day = selectedDay))
+                    val id = dao.insertSession(WorkoutSession(
+                        day = selectedDay,
+                        trainingMode = trainingMode.name,
+                        equipmentProfile = equipmentProfile.name
+                    ))
+                    onSessionChange(WorkoutSession(
+                        id = id, day = selectedDay,
+                        trainingMode = trainingMode.name,
+                        equipmentProfile = equipmentProfile.name
+                    ))
                 }
             })
         }
@@ -457,11 +534,17 @@ private fun ForgeScreen(
     }
 
     val plan = TrainingPlan.days.getValue(selectedDay)
+    val modeExercises = TrainingPlan.exercisesForMode(selectedDay, trainingMode, equipmentProfile)
     Text(plan.title, color = Inv.Gold, fontSize = 20.sp, fontWeight = FontWeight.Bold)
 
     if (plan.exercises.isEmpty()) {
         Text(
             "Recovery and occupational activity day. No formal session scheduled.",
+            color = Inv.TextSecondary, fontSize = 14.sp
+        )
+    } else if (modeExercises.isEmpty()) {
+        Text(
+            "No exercises available for ${trainingMode.label} mode with ${equipmentProfile.name}. Try changing mode or equipment.",
             color = Inv.TextSecondary, fontSize = 14.sp
         )
     }
@@ -493,16 +576,17 @@ private fun ForgeScreen(
 
     // Exercise loggers
     val sessionId = activeSession?.id ?: System.currentTimeMillis()
-    plan.exercises.forEach { exercise ->
-        key(selectedDay, exercise.name) {
+    modeExercises.forEach { exercise ->
+        key(selectedDay, exercise.name, trainingMode) {
             ExerciseLogger(
                 exercise = exercise,
                 previous = sets.filter { it.exercise == exercise.name },
                 sessionId = sessionId,
                 dao = dao,
                 scope = scope,
+                trainingMode = trainingMode,
+                equipmentProfile = equipmentProfile,
                 onSetSaved = {
-                    // Start rest timer on set save (90 seconds default)
                     restSeconds = 90
                     restRunning = true
                 }
@@ -518,74 +602,163 @@ private fun ExerciseLogger(
     sessionId: Long,
     dao: TrainingDao,
     scope: kotlinx.coroutines.CoroutineScope,
+    trainingMode: TrainingMode,
+    equipmentProfile: EquipmentProfile,
     onSetSaved: () -> Unit
 ) {
+    val def = ExerciseLibrary.find(exercise.name)
+    val measureType = def?.primaryMeasurement ?: MeasurementType.WEIGHT_REPS
     val last = previous.firstOrNull()
+
     var weight by remember(exercise.name) { mutableStateOf(last?.weightLb?.toString() ?: "") }
     var reps by remember(exercise.name) { mutableStateOf("") }
+    var holdSec by remember(exercise.name) { mutableStateOf("") }
+    var duration by remember(exercise.name) { mutableStateOf("") }
+    var distance by remember(exercise.name) { mutableStateOf("") }
+    var assistLb by remember(exercise.name) { mutableStateOf("") }
+    var effort by remember(exercise.name) { mutableStateOf("") }
+    var notes by remember(exercise.name) { mutableStateOf("") }
     var setNumber by remember(exercise.name) { mutableIntStateOf(1) }
     var feedback by remember(exercise.name) { mutableStateOf("") }
+    var showSubstitutions by remember(exercise.name) { mutableStateOf(false) }
 
     // Progression suggestion (not auto-applied)
-    val suggestion = remember(last) {
-        if (last != null && last.reps >= (exercise.repRange.split("–", "–").lastOrNull()?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 999)) {
+    val suggestion = remember(last, exercise.name) {
+        val calisthenics = CalisthenicsProgression.suggestProgression(exercise.name)
+        if (calisthenics != null && !calisthenics.isMaxLevel) {
+            val next = calisthenics.nextLevel
+            if (next != null) "Progression available: ${next.name} (${next.assessmentCriteria})" else null
+        } else if (last != null && measureType == MeasurementType.WEIGHT_REPS &&
+            last.reps >= (exercise.repRange.split("–", "–").lastOrNull()?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 999)) {
             "Consider increasing weight by 2.5–5 lb next session (suggestion only)."
         } else null
     }
 
     InvCard {
         CardLabel(exercise.name)
-        Text(
-            "Plan: ${exercise.sets} sets · ${exercise.repRange}",
-            color = Inv.TextTertiary, fontSize = 13.sp
-        )
-        if (last != null) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
-                "Previous: ${last.weightLb} lb × ${last.reps}",
-                color = Inv.TextSecondary, fontSize = 12.sp
+                "Plan: ${exercise.sets} sets · ${exercise.repRange}",
+                color = Inv.TextTertiary, fontSize = 13.sp
             )
+            Text(measureType.label, color = Inv.TextTertiary, fontSize = 11.sp)
+        }
+        if (def?.isBodyweight == true) {
+            Text("Bodyweight", color = Inv.GoldMuted, fontSize = 11.sp)
+        }
+        if (last != null) {
+            val prevText = when (MeasurementType.fromString(last.measurementType)) {
+                MeasurementType.WEIGHT_REPS -> "Previous: ${last.weightLb} lb × ${last.reps}"
+                MeasurementType.REPS_ONLY -> "Previous: ${last.reps} reps"
+                MeasurementType.HOLD_DURATION -> "Previous: ${last.holdSeconds ?: 0}s hold"
+                MeasurementType.DURATION_DISTANCE -> "Previous: ${last.durationMinutes ?: 0} min · ${last.distanceKm ?: 0} km"
+                MeasurementType.ASSISTED_WEIGHT -> "Previous: ${last.reps} reps (${last.assistanceLb ?: 0} lb assist)"
+                MeasurementType.SKILL_LEVEL -> "Previous: ${last.skillLevel ?: "—"}"
+            }
+            Text(prevText, color = Inv.TextSecondary, fontSize = 12.sp)
         }
         if (suggestion != null) {
             Text(suggestion, color = Inv.GoldHighlight, fontSize = 12.sp)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            InvField(
-                value = weight,
-                onValueChange = { weight = it },
-                label = "lb",
-                modifier = Modifier.weight(1f),
-                decimal = true
-            )
-            InvField(
-                value = reps,
-                onValueChange = { reps = it },
-                label = "Reps",
-                modifier = Modifier.weight(1f),
-                numeric = true
-            )
+        if (def?.safetyNotes?.isNotEmpty() == true) {
+            Text("⚠ ${def.safetyNotes}", color = Inv.GoldMuted, fontSize = 11.sp)
         }
+
+        // Measurement inputs based on type
+        when (measureType) {
+            MeasurementType.WEIGHT_REPS -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    InvField(value = weight, onValueChange = { weight = it }, label = "lb",
+                        modifier = Modifier.weight(1f), decimal = true)
+                    InvField(value = reps, onValueChange = { reps = it }, label = "Reps",
+                        modifier = Modifier.weight(1f), numeric = true)
+                }
+            }
+            MeasurementType.REPS_ONLY -> {
+                InvField(value = reps, onValueChange = { reps = it }, label = "Reps",
+                    modifier = Modifier.fillMaxWidth(), numeric = true)
+            }
+            MeasurementType.HOLD_DURATION -> {
+                InvField(value = holdSec, onValueChange = { holdSec = it }, label = "Seconds",
+                    modifier = Modifier.fillMaxWidth(), numeric = true)
+            }
+            MeasurementType.DURATION_DISTANCE -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    InvField(value = duration, onValueChange = { duration = it }, label = "Minutes",
+                        modifier = Modifier.weight(1f), decimal = true)
+                    InvField(value = distance, onValueChange = { distance = it }, label = "km",
+                        modifier = Modifier.weight(1f), decimal = true)
+                }
+            }
+            MeasurementType.ASSISTED_WEIGHT -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    InvField(value = reps, onValueChange = { reps = it }, label = "Reps",
+                        modifier = Modifier.weight(1f), numeric = true)
+                    InvField(value = assistLb, onValueChange = { assistLb = it }, label = "Assist lb",
+                        modifier = Modifier.weight(1f), decimal = true)
+                }
+            }
+            MeasurementType.SKILL_LEVEL -> {
+                InvField(value = notes, onValueChange = { notes = it }, label = "Skill / technique notes",
+                    modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        // Optional RPE field
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            InvField(value = effort, onValueChange = { effort = it }, label = "RPE (1–10)",
+                modifier = Modifier.weight(1f), numeric = true)
+            if (measureType != MeasurementType.SKILL_LEVEL) {
+                InvField(value = notes, onValueChange = { notes = it }, label = "Notes",
+                    modifier = Modifier.weight(2f))
+            }
+        }
+
         InvButton(
             text = "Save set $setNumber",
             onClick = {
-                val w = weight.toDoubleOrNull()
-                val r = reps.toIntOrNull()
-                if (w != null && w >= 0 && r != null && r > 0) {
+                val valid = when (measureType) {
+                    MeasurementType.WEIGHT_REPS -> {
+                        weight.toDoubleOrNull() != null && (reps.toIntOrNull() ?: 0) > 0
+                    }
+                    MeasurementType.REPS_ONLY -> (reps.toIntOrNull() ?: 0) > 0
+                    MeasurementType.HOLD_DURATION -> (holdSec.toIntOrNull() ?: 0) > 0
+                    MeasurementType.DURATION_DISTANCE -> (duration.toDoubleOrNull() ?: 0.0) > 0
+                    MeasurementType.ASSISTED_WEIGHT -> (reps.toIntOrNull() ?: 0) > 0
+                    MeasurementType.SKILL_LEVEL -> notes.isNotBlank()
+                }
+                if (valid) {
                     scope.launch {
                         dao.addSet(WorkoutSet(
                             sessionId = sessionId,
                             day = TrainingPlan.today(),
                             exercise = exercise.name,
                             setNumber = setNumber,
-                            weightLb = w,
-                            reps = r
+                            weightLb = weight.toDoubleOrNull() ?: 0.0,
+                            reps = reps.toIntOrNull() ?: 0,
+                            measurementType = measureType.name,
+                            holdSeconds = holdSec.toIntOrNull(),
+                            durationMinutes = duration.toDoubleOrNull(),
+                            distanceKm = distance.toDoubleOrNull(),
+                            assistanceLb = assistLb.toDoubleOrNull(),
+                            perceivedEffort = effort.toIntOrNull()?.coerceIn(1, 10),
+                            techniqueNotes = notes.ifBlank { null },
+                            trainingMode = trainingMode.name
                         ))
                     }
                     setNumber++
                     feedback = "Set saved"
-                    reps = ""
+                    reps = ""; holdSec = ""; duration = ""; distance = ""; effort = ""; notes = ""
                     onSetSaved()
                 } else {
-                    feedback = "Enter valid weight (0 for bodyweight) and reps."
+                    feedback = when (measureType) {
+                        MeasurementType.WEIGHT_REPS -> "Enter valid weight and reps."
+                        MeasurementType.REPS_ONLY -> "Enter number of reps."
+                        MeasurementType.HOLD_DURATION -> "Enter hold time in seconds."
+                        MeasurementType.DURATION_DISTANCE -> "Enter duration in minutes."
+                        MeasurementType.ASSISTED_WEIGHT -> "Enter reps performed."
+                        MeasurementType.SKILL_LEVEL -> "Enter technique notes."
+                    }
                 }
             }
         )
@@ -595,6 +768,34 @@ private fun ExerciseLogger(
                 color = if (feedback.startsWith("Set")) Inv.Success else Inv.Error,
                 fontSize = 12.sp
             )
+        }
+
+        // Substitution toggle
+        if (def != null) {
+            TextButton(onClick = { showSubstitutions = !showSubstitutions }) {
+                Text(
+                    if (showSubstitutions) "Hide alternatives" else "Show alternatives",
+                    color = Inv.GoldMuted, fontSize = 12.sp
+                )
+            }
+            if (showSubstitutions) {
+                val subs = ExerciseLibrary.findSubstitutions(exercise.name, trainingMode, equipmentProfile)
+                if (subs.isEmpty()) {
+                    Text("No alternatives available for current mode and equipment.",
+                        color = Inv.TextTertiary, fontSize = 12.sp)
+                } else {
+                    subs.take(4).forEach { sub ->
+                        Column(Modifier.padding(vertical = 2.dp)) {
+                            Text("→ ${sub.replacement}", color = Inv.TextPrimary, fontSize = 13.sp)
+                            Text(sub.equivalenceNote, color = Inv.TextTertiary, fontSize = 11.sp)
+                        }
+                    }
+                    Text(
+                        "Alternatives share a movement pattern. They are not mechanically identical.",
+                        color = Inv.TextTertiary, fontSize = 10.sp
+                    )
+                }
+            }
         }
     }
 }
@@ -655,12 +856,22 @@ private fun RecordsScreen(
         sets.take(30).forEach { item ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
+                    val detail = when (MeasurementType.fromString(item.measurementType)) {
+                        MeasurementType.WEIGHT_REPS -> "${item.weightLb} lb × ${item.reps}"
+                        MeasurementType.REPS_ONLY -> "${item.reps} reps"
+                        MeasurementType.HOLD_DURATION -> "${item.holdSeconds ?: 0}s hold"
+                        MeasurementType.DURATION_DISTANCE -> "${item.durationMinutes ?: 0} min · ${item.distanceKm ?: 0} km"
+                        MeasurementType.ASSISTED_WEIGHT -> "${item.reps} reps (${item.assistanceLb ?: 0} lb assist)"
+                        MeasurementType.SKILL_LEVEL -> item.skillLevel ?: "—"
+                    }
                     Text(
-                        "${item.exercise}: ${item.weightLb} lb × ${item.reps}",
+                        "${item.exercise}: $detail",
                         color = Inv.TextPrimary, fontSize = 13.sp
                     )
+                    val modeTag = item.trainingMode?.let { " · $it" } ?: ""
+                    val rpeTag = item.perceivedEffort?.let { " · RPE $it" } ?: ""
                     Text(
-                        "${item.day} · ${displayDate(item.timestamp)}",
+                        "${item.day} · ${displayDate(item.timestamp)}$modeTag$rpeTag",
                         color = Inv.TextTertiary, fontSize = 11.sp
                     )
                 }

@@ -13,7 +13,18 @@ data class WorkoutSet(
     val setNumber: Int,
     val weightLb: Double,
     val reps: Int,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    // v3 fields — nullable for backward compatibility with existing records
+    val measurementType: String = "WEIGHT_REPS",   // MeasurementType.name
+    val holdSeconds: Int? = null,                   // For HOLD_DURATION
+    val durationMinutes: Double? = null,            // For DURATION_DISTANCE
+    val distanceKm: Double? = null,                 // For DURATION_DISTANCE
+    val assistanceLb: Double? = null,               // For ASSISTED_WEIGHT (negative = band assist)
+    val skillLevel: String? = null,                 // For SKILL_LEVEL (progression level name)
+    val perceivedEffort: Int? = null,               // RPE 1–10
+    val techniqueNotes: String? = null,             // Free-text form notes
+    val exerciseVariation: String? = null,          // e.g. "Wide grip", "Close stance"
+    val trainingMode: String? = null                // TrainingMode.name at time of logging
 )
 
 @Entity(tableName = "weight_entries")
@@ -48,7 +59,41 @@ data class WorkoutSession(
     val startedAt: Long = System.currentTimeMillis(),
     val finishedAt: Long? = null,
     val status: String = "active",          // active | paused | finished
-    val notes: String = ""
+    val notes: String = "",
+    val trainingMode: String = "HYBRID",    // v3: TrainingMode.name
+    val equipmentProfile: String = ""       // v3: equipment profile name
+)
+
+// ── v3 new entities ─────────────────────────────────────────────
+
+@Entity(tableName = "equipment_profiles")
+data class SavedEquipmentProfile(
+    @PrimaryKey val name: String,           // "TREX Full Gym", "Home Bodyweight", etc.
+    val description: String = "",
+    val equipmentJson: String = "[]",       // JSON array of Equipment.name strings
+    val isPreset: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "calisthenics_progress")
+data class CalisthenicsProgressRecord(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val movementFamily: String,             // e.g. "Push-up", "Pull-up"
+    val exerciseName: String,               // Current exercise in progression
+    val level: Int,                         // Progression level number
+    val bestSets: Int = 0,
+    val bestReps: Int = 0,
+    val bestHoldSeconds: Int = 0,
+    val assessedReady: Boolean = false,     // Met assessment criteria
+    val advancedByUser: Boolean = false,    // User chose to advance (never auto)
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "user_preferences")
+data class UserPreference(
+    @PrimaryKey val key: String,
+    val value: String,
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Dao
@@ -103,6 +148,40 @@ interface TrainingDao {
 
     @Query("SELECT * FROM workout_sessions ORDER BY startedAt DESC LIMIT 10")
     suspend fun recentSessions(): List<WorkoutSession>
+
+    // ── Equipment profiles ──
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertEquipmentProfile(profile: SavedEquipmentProfile)
+
+    @Query("SELECT * FROM equipment_profiles ORDER BY name ASC")
+    fun allEquipmentProfiles(): Flow<List<SavedEquipmentProfile>>
+
+    @Query("SELECT * FROM equipment_profiles WHERE name = :name LIMIT 1")
+    suspend fun equipmentProfile(name: String): SavedEquipmentProfile?
+
+    @Delete suspend fun deleteEquipmentProfile(profile: SavedEquipmentProfile)
+
+    // ── Calisthenics progress ──
+    @Insert suspend fun insertProgress(record: CalisthenicsProgressRecord): Long
+
+    @Query("UPDATE calisthenics_progress SET bestSets = :sets, bestReps = :reps, bestHoldSeconds = :holdSec, assessedReady = :ready, updatedAt = :now WHERE id = :id")
+    suspend fun updateProgress(id: Long, sets: Int, reps: Int, holdSec: Int, ready: Boolean, now: Long = System.currentTimeMillis())
+
+    @Query("SELECT * FROM calisthenics_progress WHERE movementFamily = :family ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun latestProgress(family: String): CalisthenicsProgressRecord?
+
+    @Query("SELECT * FROM calisthenics_progress ORDER BY updatedAt DESC")
+    fun allProgress(): Flow<List<CalisthenicsProgressRecord>>
+
+    // ── User preferences ──
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPreference(pref: UserPreference)
+
+    @Query("SELECT value FROM user_preferences WHERE `key` = :key LIMIT 1")
+    suspend fun preference(key: String): String?
+
+    @Query("SELECT * FROM user_preferences")
+    fun allPreferences(): Flow<List<UserPreference>>
 }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -128,10 +207,66 @@ val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
     }
 }
 
+val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        // Expand workout_sets with new measurement columns
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN measurementType TEXT NOT NULL DEFAULT 'WEIGHT_REPS'")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN holdSeconds INTEGER")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN durationMinutes REAL")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN distanceKm REAL")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN assistanceLb REAL")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN skillLevel TEXT")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN perceivedEffort INTEGER")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN techniqueNotes TEXT")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN exerciseVariation TEXT")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN trainingMode TEXT")
+
+        // Expand workout_sessions with mode and equipment
+        db.execSQL("ALTER TABLE workout_sessions ADD COLUMN trainingMode TEXT NOT NULL DEFAULT 'HYBRID'")
+        db.execSQL("ALTER TABLE workout_sessions ADD COLUMN equipmentProfile TEXT NOT NULL DEFAULT ''")
+
+        // New tables
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS equipment_profiles (
+                name TEXT NOT NULL PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                equipmentJson TEXT NOT NULL DEFAULT '[]',
+                isPreset INTEGER NOT NULL DEFAULT 0,
+                createdAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS calisthenics_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                movementFamily TEXT NOT NULL,
+                exerciseName TEXT NOT NULL,
+                level INTEGER NOT NULL,
+                bestSets INTEGER NOT NULL DEFAULT 0,
+                bestReps INTEGER NOT NULL DEFAULT 0,
+                bestHoldSeconds INTEGER NOT NULL DEFAULT 0,
+                assessedReady INTEGER NOT NULL DEFAULT 0,
+                advancedByUser INTEGER NOT NULL DEFAULT 0,
+                updatedAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                `key` TEXT NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL,
+                updatedAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+}
+
 @Database(
     entities = [WorkoutSet::class, WeightEntry::class, RecoveryEntry::class,
-                DailyStepRecord::class, WorkoutSession::class],
-    version = 2,
+                DailyStepRecord::class, WorkoutSession::class,
+                SavedEquipmentProfile::class, CalisthenicsProgressRecord::class,
+                UserPreference::class],
+    version = 3,
     exportSchema = false
 )
 abstract class InvictusDatabase : RoomDatabase() {
@@ -142,7 +277,7 @@ abstract class InvictusDatabase : RoomDatabase() {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, InvictusDatabase::class.java, "invictus.db"
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 .also { instance = it }
         }

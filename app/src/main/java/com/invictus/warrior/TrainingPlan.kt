@@ -4,7 +4,12 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 
 // Rep ranges are program targets, not claims of measured present ability.
-data class PlannedExercise(val name: String, val sets: Int, val repRange: String)
+data class PlannedExercise(
+    val name: String,
+    val sets: Int,
+    val repRange: String,
+    val mode: TrainingMode = TrainingMode.WEIGHTS
+)
 data class PlannedDay(val title: String, val exercises: List<PlannedExercise>)
 
 object TrainingPlan {
@@ -45,6 +50,36 @@ object TrainingPlan {
             in 17..28 -> "Strength & Skill"
             in 29..40 -> "Athletic Development"
             else -> "Consolidation"
+        }
+    }
+
+    /**
+     * Get exercises for a day filtered by training mode.
+     * In HYBRID mode, all exercises are included.
+     * In WEIGHTS mode, only weighted exercises.
+     * In CALISTHENICS mode, substitutes bodyweight alternatives.
+     */
+    fun exercisesForMode(dayName: String, mode: TrainingMode, profile: EquipmentProfile): List<PlannedExercise> {
+        val planned = days[dayName] ?: return emptyList()
+        if (planned.exercises.isEmpty()) return emptyList()
+
+        return when (mode) {
+            TrainingMode.HYBRID -> planned.exercises
+            TrainingMode.WEIGHTS -> planned.exercises.filter { ex ->
+                val def = ExerciseLibrary.find(ex.name)
+                def == null || !def.isBodyweight
+            }.ifEmpty { planned.exercises } // fallback to full list if filter empties it
+            TrainingMode.CALISTHENICS -> planned.exercises.mapNotNull { ex ->
+                val def = ExerciseLibrary.find(ex.name)
+                if (def == null || def.isBodyweight) ex
+                else {
+                    // Find bodyweight substitute in same movement pattern
+                    val subs = ExerciseLibrary.findSubstitutions(ex.name, mode, profile)
+                    val bwSub = subs.firstOrNull()
+                    if (bwSub != null) ex.copy(name = bwSub.replacement, mode = TrainingMode.CALISTHENICS)
+                    else null // No substitute available — skip
+                }
+            }
         }
     }
 }
