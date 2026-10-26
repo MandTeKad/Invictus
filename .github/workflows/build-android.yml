@@ -41,13 +41,18 @@ jobs:
           gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-output.log
           echo "BUILD_OK=true" >> "$GITHUB_ENV"
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build-output.log
-          retention-days: 3
+      - name: Post build errors to summary
+        if: failure()
+        shell: bash
+        run: |
+          echo '## Build Errors' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -i -A2 'error\|FAILURE\|failed\|Unresolved\|cannot find' build-output.log | tail -80 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '## Last 40 lines' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -40 build-output.log >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v4
