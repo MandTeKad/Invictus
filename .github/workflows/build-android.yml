@@ -35,10 +35,14 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-output.log
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-output.log
+          echo "BUILD_OK=true" >> "$GITHUB_ENV"
 
-      - name: Upload build log on failure
-        if: failure()
+      - name: Upload build log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
