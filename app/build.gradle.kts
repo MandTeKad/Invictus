@@ -13,8 +13,8 @@ android {
         applicationId = "com.invictus.warrior"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.3"
+        versionCode = 4
+        versionName = "0.1.4"
     }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions {
@@ -43,4 +43,5 @@ dependencies {
     kapt("androidx.room:room-compiler:2.7.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }

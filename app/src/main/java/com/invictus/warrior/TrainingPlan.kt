@@ -57,3 +57,91 @@ object RecoveryAdvice {
         else -> "Planned session is reasonable if warm-ups feel normal."
     }
 }
+
+data class ScheduleRecommendation(
+    val day: PlannedDay,
+    val isReduced: Boolean,
+    val reason: String
+)
+
+object AdaptiveSchedule {
+    /**
+     * Recommend a training session based on recovery data.
+     * Never assumes adequate recovery from a missing check-in.
+     * Progression suggestions are surfaced but NOT auto-applied.
+     */
+    fun recommend(
+        dayName: String,
+        latestRecovery: RecoveryEntry?,
+        missedDays: Int = 0
+    ): ScheduleRecommendation {
+        val planned = TrainingPlan.days[dayName]
+            ?: return ScheduleRecommendation(
+                PlannedDay("Rest", emptyList()),
+                isReduced = false,
+                reason = "No plan for $dayName."
+            )
+
+        if (planned.exercises.isEmpty()) {
+            return ScheduleRecommendation(planned, isReduced = false, reason = "Recovery/work day.")
+        }
+
+        // No check-in → do not assume adequate recovery
+        if (latestRecovery == null) {
+            return ScheduleRecommendation(
+                reduce(planned),
+                isReduced = true,
+                reason = "No recovery check-in recorded. Using reduced session — log a check-in for full programming."
+            )
+        }
+
+        val hours = latestRecovery.sleepHours
+        val fatigue = latestRecovery.fatigue
+        val pain = latestRecovery.pain
+
+        if (pain) {
+            return ScheduleRecommendation(
+                PlannedDay("${planned.title} — Paused", emptyList()),
+                isReduced = true,
+                reason = "Pain reported. Pause training and assess symptoms."
+            )
+        }
+
+        if (hours < 5 || fatigue >= 9) {
+            return ScheduleRecommendation(
+                PlannedDay("${planned.title} — Recovery Only", emptyList()),
+                isReduced = true,
+                reason = "Poor recovery (${hours}h sleep, fatigue $fatigue/10). Rest day recommended."
+            )
+        }
+
+        if (hours < 6 || fatigue >= 7) {
+            return ScheduleRecommendation(
+                reduce(planned),
+                isReduced = true,
+                reason = "Moderate recovery (${hours}h sleep, fatigue $fatigue/10). Reduced volume."
+            )
+        }
+
+        // Missed sessions → reschedule consideration
+        if (missedDays > 0) {
+            return ScheduleRecommendation(
+                planned,
+                isReduced = false,
+                reason = "Returning after $missedDays missed day(s). Monitor warm-up quality."
+            )
+        }
+
+        return ScheduleRecommendation(planned, isReduced = false, reason = "Recovery adequate. Full session.")
+    }
+
+    /** Cut volume: reduce sets by ~40%, keep exercises intact. */
+    fun reduce(day: PlannedDay): PlannedDay {
+        return day.copy(
+            title = "${day.title} (Reduced)",
+            exercises = day.exercises.map { ex ->
+                ex.copy(sets = (ex.sets * 0.6).toInt().coerceAtLeast(1))
+            }
+        )
+    }
+}
