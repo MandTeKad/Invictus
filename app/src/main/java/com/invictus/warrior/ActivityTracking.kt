@@ -2,7 +2,9 @@ package com.invictus.warrior
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -232,7 +234,28 @@ internal fun ActivityTrackingScreen(weightLb: Double, dao: TrainingDao) {
                             val isGranted = runCatching {
                                 client.permissionController.getGrantedPermissions().contains(readStepsPermission)
                             }.getOrDefault(false)
-                            if (isGranted) refresh() else healthLauncher.launch(setOf(readStepsPermission))
+                            if (isGranted) {
+                                refresh()
+                            } else {
+                                try {
+                                    healthLauncher.launch(setOf(readStepsPermission))
+                                } catch (e: Exception) {
+                                    // Fallback: open Health Connect app directly
+                                    error = "Could not open permission dialog. Opening Health Connect settings…"
+                                    try {
+                                        val intent = Intent("androidx.health.ACTION_MANAGE_HEALTH_PERMISSIONS")
+                                            .putExtra(Intent.EXTRA_PACKAGE_NAME, context.packageName)
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {
+                                        try {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW,
+                                                Uri.parse("market://details?id=com.google.android.apps.healthdata")))
+                                        } catch (_: Exception) {
+                                            error = "Install or open Health Connect from the Play Store, then grant Invictus step access."
+                                        }
+                                    }
+                                }
+                            }
                         }
                     })
                     InvOutlinedButton(
