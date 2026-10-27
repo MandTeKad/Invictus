@@ -56,6 +56,9 @@ class MainActivity : ComponentActivity() {
             CampaignRepository.ensureRegistryImported(appContext, campaignDao)
         }
 
+        // Ensure background step-sync worker is running (keeps widget fresh)
+        StepSyncWorker.schedule(appContext)
+
         setContent { InvictusApp(dao, campaignDao) }
     }
 }

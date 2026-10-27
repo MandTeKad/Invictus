@@ -291,8 +291,19 @@ private fun StepWidgetContent(bitmap: Bitmap) {
 
 /**
  * Receiver that tells the system which GlanceAppWidget to instantiate.
- * Registered in AndroidManifest.xml.
+ * Starts the background step-sync worker when the first widget is placed
+ * and cancels it when the last widget is removed.
  */
 class StepWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = StepWidget()
+
+    override fun onEnabled(context: Context) {
+        super.onEnabled(context)
+        StepSyncWorker.schedule(context)
+    }
+
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        StepSyncWorker.cancel(context)
+    }
 }
