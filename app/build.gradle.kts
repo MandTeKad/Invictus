@@ -13,8 +13,8 @@ android {
         applicationId = "com.invictus.warrior"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.4"
+        versionCode = 5
+        versionName = "0.2.0"
     }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions {

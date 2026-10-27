@@ -46,13 +46,22 @@ import kotlin.math.sin
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val dao = InvictusDatabase.get(this).dao()
-        setContent { InvictusApp(dao) }
+        val db = InvictusDatabase.get(this)
+        val dao = db.dao()
+        val campaignDao = db.campaignDao()
+
+        // Import registry data on first launch (non-blocking)
+        val appContext = applicationContext
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            CampaignRepository.ensureRegistryImported(appContext, campaignDao)
+        }
+
+        setContent { InvictusApp(dao, campaignDao) }
     }
 }
 
 @Composable
-private fun InvictusApp(dao: TrainingDao) {
+private fun InvictusApp(dao: TrainingDao, campaignDao: CampaignDao) {
     var showSplash by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
@@ -76,7 +85,7 @@ private fun InvictusApp(dao: TrainingDao) {
             label = "invictus_startup_fade"
         ) { splash ->
             if (splash) InvictusSplashScreen()
-            else InvictusMainScaffold(dao)
+            else InvictusMainScaffold(dao, campaignDao)
         }
     }
 }
@@ -152,14 +161,25 @@ private fun LaurelWreathLogo(modifier: Modifier = Modifier, color: Color = Inv.G
 /* ── Main scaffold ──────────────────────────────────────────── */
 
 @Composable
-private fun InvictusMainScaffold(dao: TrainingDao) {
+private fun InvictusMainScaffold(dao: TrainingDao, campaignDao: CampaignDao) {
     val sets by dao.allSets().collectAsStateWithLifecycle(initialValue = emptyList())
     val weights by dao.weights().collectAsStateWithLifecycle(initialValue = emptyList())
     val recoveries by dao.recoveries().collectAsStateWithLifecycle(initialValue = emptyList())
     val sessions by dao.allSessions().collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // Campaign data
+    val goals by campaignDao.allGoals().collectAsStateWithLifecycle(initialValue = emptyList())
+    val goalProgress by campaignDao.allGoalProgress().collectAsStateWithLifecycle(initialValue = emptyList())
+    val milestoneProgress by campaignDao.allMilestoneProgress().collectAsStateWithLifecycle(initialValue = emptyList())
+    val currentRank by campaignDao.currentRankFlow().collectAsStateWithLifecycle(initialValue = null)
+    val totalXP by campaignDao.totalXPFlow().collectAsStateWithLifecycle(initialValue = 0)
+
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(0) }
     var selectedDay by remember { mutableStateOf(TrainingPlan.today()) }
+
+    // Campaign navigation: null = dashboard, non-null = goal detail
+    var selectedGoalId by remember { mutableStateOf<String?>(null) }
 
     // Active workout session
     var activeSession by remember { mutableStateOf<WorkoutSession?>(null) }
@@ -172,12 +192,15 @@ private fun InvictusMainScaffold(dao: TrainingDao) {
                 containerColor = Inv.NavBackground,
                 tonalElevation = 0.dp
             ) {
-                val labels = listOf("Command", "Forge", "Records", "Recovery", "Movement")
-                val icons = listOf("⌂", "⚔", "☰", "♡", "↟")
+                val labels = listOf("Command", "Campaign", "Forge", "Records", "Recovery")
+                val icons = listOf("⌂", "♆", "⚔", "☰", "♡")
                 labels.forEachIndexed { index, title ->
                     NavigationBarItem(
                         selected = tab == index,
-                        onClick = { tab = index },
+                        onClick = {
+                            tab = index
+                            if (index != 1) selectedGoalId = null // Reset campaign navigation
+                        },
                         icon = { Text(icons[index], fontSize = 21.sp) },
                         label = { Text(title, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(
@@ -204,12 +227,33 @@ private fun InvictusMainScaffold(dao: TrainingDao) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("INVICTUS", color = Inv.Gold, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                 Spacer(Modifier.weight(1f))
-                Text("v0.1.4", color = Inv.TextTertiary, fontSize = 12.sp)
+                Text("v0.2.0", color = Inv.TextTertiary, fontSize = 12.sp)
             }
 
             when (tab) {
-                0 -> CommandScreen(sets, weights, recoveries, sessions, onTrain = { tab = 1 })
-                1 -> ForgeScreen(
+                0 -> CommandScreen(sets, weights, recoveries, sessions, onTrain = { tab = 2 })
+                1 -> {
+                    if (selectedGoalId != null) {
+                        GoalDetailScreen(
+                            goalId = selectedGoalId!!,
+                            campaignDao = campaignDao,
+                            scope = scope,
+                            onBack = { selectedGoalId = null }
+                        )
+                    } else {
+                        CampaignScreen(
+                            goals = goals,
+                            goalProgress = goalProgress,
+                            milestoneProgress = milestoneProgress,
+                            currentRank = currentRank,
+                            totalXP = totalXP,
+                            campaignDao = campaignDao,
+                            scope = scope,
+                            onGoalSelected = { selectedGoalId = it }
+                        )
+                    }
+                }
+                2 -> ForgeScreen(
                     selectedDay = selectedDay,
                     onDay = { selectedDay = it },
                     sets = sets,
@@ -218,9 +262,8 @@ private fun InvictusMainScaffold(dao: TrainingDao) {
                     onSessionChange = { activeSession = it },
                     scope = scope
                 )
-                2 -> RecordsScreen(sets, weights, dao, scope)
-                3 -> RecoveryScreen(recoveries, dao, scope)
-                4 -> ActivityTrackingScreen(weights.firstOrNull()?.pounds ?: 287.0, dao)
+                3 -> RecordsScreen(sets, weights, dao, scope)
+                4 -> RecoveryScreen(recoveries, dao, scope)
             }
         }
     }

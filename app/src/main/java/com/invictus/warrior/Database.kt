@@ -184,6 +184,107 @@ interface TrainingDao {
     fun allPreferences(): Flow<List<UserPreference>>
 }
 
+val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        // Goal definitions — seed data from registry.json
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS goal_definitions (
+                id TEXT NOT NULL PRIMARY KEY,
+                domain TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                tier TEXT NOT NULL,
+                verification TEXT NOT NULL,
+                sourceInterview TEXT NOT NULL,
+                provenance TEXT NOT NULL,
+                registryVersion TEXT NOT NULL
+            )
+        """.trimIndent())
+
+        // Milestone definitions — 4 stages per goal
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS milestone_definitions (
+                id TEXT NOT NULL PRIMARY KEY,
+                goalId TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                stage INTEGER NOT NULL,
+                stageLabel TEXT NOT NULL,
+                category TEXT NOT NULL,
+                verification TEXT NOT NULL,
+                sourceInterview TEXT NOT NULL,
+                registryVersion TEXT NOT NULL,
+                FOREIGN KEY (goalId) REFERENCES goal_definitions(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_milestone_definitions_goalId ON milestone_definitions(goalId)")
+
+        // Goal progress — user's status per goal
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS goal_progress (
+                goalId TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'unassessed',
+                currentCapabilityVerified INTEGER NOT NULL DEFAULT 0,
+                lastAssessedAt INTEGER,
+                achievedAt INTEGER,
+                notes TEXT NOT NULL DEFAULT '',
+                updatedAt INTEGER NOT NULL,
+                FOREIGN KEY (goalId) REFERENCES goal_definitions(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+
+        // Milestone progress — user's status per milestone
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS milestone_progress (
+                milestoneId TEXT NOT NULL PRIMARY KEY,
+                goalId TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'unassessed',
+                evidenceNotes TEXT NOT NULL DEFAULT '',
+                achievedAt INTEGER,
+                updatedAt INTEGER NOT NULL,
+                FOREIGN KEY (milestoneId) REFERENCES milestone_definitions(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_milestone_progress_goalId ON milestone_progress(goalId)")
+
+        // XP events — training, milestone, assessment XP
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS xp_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                source TEXT NOT NULL,
+                sourceId TEXT,
+                xpAwarded INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_xp_events_sourceId ON xp_events(sourceId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_xp_events_timestamp ON xp_events(timestamp)")
+
+        // Rank grants — promotion history
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS rank_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                rankName TEXT NOT NULL,
+                rankLevel INTEGER NOT NULL,
+                grantedAt INTEGER NOT NULL,
+                xpAtGrant INTEGER NOT NULL,
+                notes TEXT NOT NULL DEFAULT ''
+            )
+        """.trimIndent())
+
+        // Registry version tracking
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS registry_versions (
+                version TEXT NOT NULL PRIMARY KEY,
+                importedAt INTEGER NOT NULL,
+                goalCount INTEGER NOT NULL,
+                milestoneCount INTEGER NOT NULL,
+                frozen INTEGER NOT NULL DEFAULT 1
+            )
+        """.trimIndent())
+    }
+}
+
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         db.execSQL("""
@@ -265,19 +366,24 @@ val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
     entities = [WorkoutSet::class, WeightEntry::class, RecoveryEntry::class,
                 DailyStepRecord::class, WorkoutSession::class,
                 SavedEquipmentProfile::class, CalisthenicsProgressRecord::class,
-                UserPreference::class],
-    version = 3,
+                UserPreference::class,
+                // v4: Imperator Campaign entities
+                GoalDefinition::class, MilestoneDefinition::class,
+                GoalProgress::class, MilestoneProgress::class,
+                XPEvent::class, RankGrant::class, RegistryVersion::class],
+    version = 4,
     exportSchema = false
 )
 abstract class InvictusDatabase : RoomDatabase() {
     abstract fun dao(): TrainingDao
+    abstract fun campaignDao(): CampaignDao
     companion object {
         @Volatile private var instance: InvictusDatabase? = null
         fun get(context: Context): InvictusDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, InvictusDatabase::class.java, "invictus.db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 .also { instance = it }
         }
