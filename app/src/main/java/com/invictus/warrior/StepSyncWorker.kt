@@ -83,12 +83,15 @@ class StepSyncWorker(
                 timeRangeFilter = TimeRangeFilter.between(start, end)
             )
         )
-        val count = (response[StepsRecord.COUNT_TOTAL] ?: 0L).coerceIn(0L, 200000L).toInt()
+        val hcCount = (response[StepsRecord.COUNT_TOTAL] ?: 0L).coerceIn(0L, 200000L).toInt()
 
-        // Persist to Room
+        // Keep the higher of Health Connect vs what's already in Room (manual pedometer entry)
         val dao = InvictusDatabase.get(context).dao()
+        val existing = dao.stepsForDate(today.toString())?.steps ?: 0
+        val count = maxOf(hcCount, existing)
+        val src = if (hcCount >= existing) "Health Connect" else (dao.stepsForDate(today.toString())?.source ?: "Health Connect")
         dao.upsertSteps(
-            DailyStepRecord(today.toString(), count, "Health Connect")
+            DailyStepRecord(today.toString(), count, src)
         )
 
         // Refresh the widget

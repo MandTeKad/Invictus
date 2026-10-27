@@ -156,20 +156,39 @@ internal fun ActivityTrackingScreen(weightLb: Double, dao: TrainingDao) {
                     onSteps = { steps = it; source = "Health Connect"; error = "" },
                     onError = { error = it })
             } else {
-                // Persist sensor steps
+                // Persist sensor steps — keep the higher of sensor vs existing (manual entry)
                 val today = LocalDate.now().toString()
                 val sensorSteps = sensorTracker.current()
-                dao.upsertSteps(DailyStepRecord(today, sensorSteps, "Foreground sensor"))
+                val existing = dao.stepsForDate(today)?.steps ?: 0
+                val best = maxOf(sensorSteps, existing)
+                val src = if (sensorSteps >= existing) "Foreground sensor" else (dao.stepsForDate(today)?.source ?: "Foreground sensor")
+                steps = best
+                source = src
+                dao.upsertSteps(DailyStepRecord(today, best, src))
             }
             loadHistory(dao) { stepHistory = it }
             refreshing = false
         }
     }
 
+    // Load persisted step count from Room on screen entry so manual entries survive
+    LaunchedEffect(Unit) {
+        val today = LocalDate.now().toString()
+        val saved = dao.stepsForDate(today)
+        if (saved != null && saved.steps > steps) {
+            steps = saved.steps
+            source = saved.source
+        }
+    }
+
     DisposableEffect(sensorTracker, granted, lifecycle, client) {
         if (client == null) {
-            steps = sensorTracker.current()
-            source = "Foreground sensor (partial)"
+            val sensor = sensorTracker.current()
+            // Don't overwrite a higher manual entry with a lower sensor reading
+            if (sensor > steps) {
+                steps = sensor
+                source = "Foreground sensor (partial)"
+            }
         }
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -509,10 +528,14 @@ private suspend fun refreshHealthSteps(
                 timeRangeFilter = TimeRangeFilter.between(start, end)
             )
         )
-        val count = (response[StepsRecord.COUNT_TOTAL] ?: 0L).coerceIn(0L, 200000L).toInt()
+        val hcCount = (response[StepsRecord.COUNT_TOTAL] ?: 0L).coerceIn(0L, 200000L).toInt()
+        // Keep the higher of Health Connect vs what's already in Room (manual pedometer entry)
+        val existing = dao.stepsForDate(today.toString())?.steps ?: 0
+        val count = maxOf(hcCount, existing)
+        val src = if (hcCount >= existing) "Health Connect" else (dao.stepsForDate(today.toString())?.source ?: "Health Connect")
         onSteps(count)
         // Persist to Room
-        dao.upsertSteps(DailyStepRecord(today.toString(), count, "Health Connect"))
+        dao.upsertSteps(DailyStepRecord(today.toString(), count, src))
         // Refresh home screen widget with latest steps
         try { StepWidget.refreshAll(context) } catch (_: Exception) {}
     } catch (exception: Exception) {
