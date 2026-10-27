@@ -16,6 +16,18 @@
             </intent-filter>
         </activity>
 
+        <!-- Step counter home screen widget -->
+        <receiver
+            android:name=".StepWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/step_widget_info" />
+        </receiver>
+
         <!-- Required for Health Connect to route permission requests back to Invictus -->
         <activity-alias
             android:name="ViewPermissionUsageActivity"

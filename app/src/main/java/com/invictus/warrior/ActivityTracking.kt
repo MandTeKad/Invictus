@@ -16,6 +16,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.health.connect.client.HealthConnectClient
@@ -133,7 +135,7 @@ internal fun ActivityTrackingScreen(weightLb: Double, dao: TrainingDao) {
     ) { permissions ->
         if (readStepsPermission in permissions) {
             scope.launch {
-                refreshHealthSteps(client, readStepsPermission, dao,
+                refreshHealthSteps(context, client, readStepsPermission, dao,
                     onSteps = { steps = it; source = "Health Connect" },
                     onError = { error = it })
                 loadHistory(dao) { stepHistory = it }
@@ -150,7 +152,7 @@ internal fun ActivityTrackingScreen(weightLb: Double, dao: TrainingDao) {
         scope.launch {
             refreshing = true
             if (client != null) {
-                refreshHealthSteps(client, readStepsPermission, dao,
+                refreshHealthSteps(context, client, readStepsPermission, dao,
                     onSteps = { steps = it; source = "Health Connect"; error = "" },
                     onError = { error = it })
             } else {
@@ -182,6 +184,7 @@ internal fun ActivityTrackingScreen(weightLb: Double, dao: TrainingDao) {
                     val current = sensorTracker.current()
                     if (current > 0) {
                         dao.upsertSteps(DailyStepRecord(today, current, source))
+                        try { StepWidget.refreshAll(context) } catch (_: Exception) {}
                     }
                 }
             }
@@ -204,6 +207,66 @@ internal fun ActivityTrackingScreen(weightLb: Double, dao: TrainingDao) {
 
     Column(verticalArrangement = Arrangement.spacedBy(Inv.CardGap), modifier = Modifier.fillMaxWidth()) {
         ScreenTitle("Movement", "Daily activity and step tracking")
+
+        // ── Manual Pedometer Entry ──
+        var pedometerInput by remember { mutableStateOf("") }
+        var pedometerSaved by remember { mutableStateOf(false) }
+        InvCard {
+            CardLabel("Add Steps from Pedometer")
+            Text(
+                "Enter today's reading from an external pedometer or step counter device.",
+                color = Inv.TextTertiary, fontSize = 12.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = pedometerInput,
+                    onValueChange = { v ->
+                        pedometerInput = v.filter { it.isDigit() }.take(6)
+                        pedometerSaved = false
+                    },
+                    label = { Text("Steps") },
+                    placeholder = { Text("e.g. 8500") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Inv.Gold,
+                        unfocusedBorderColor = Inv.Border,
+                        focusedLabelColor = Inv.Gold,
+                        cursorColor = Inv.Gold,
+                        focusedTextColor = Inv.TextPrimary,
+                        unfocusedTextColor = Inv.TextPrimary
+                    )
+                )
+                InvButton(
+                    text = if (pedometerSaved) "Saved" else "Set",
+                    onClick = {
+                        val count = pedometerInput.toIntOrNull() ?: return@InvButton
+                        if (count in 1..200000) {
+                            scope.launch {
+                                val today = LocalDate.now().toString()
+                                dao.upsertSteps(DailyStepRecord(today, count, "Pedometer (manual)"))
+                                steps = count
+                                source = "Pedometer (manual)"
+                                pedometerSaved = true
+                                loadHistory(dao) { stepHistory = it }
+                                // Refresh home screen widget
+                                try { StepWidget.refreshAll(context) } catch (_: Exception) {}
+                            }
+                        }
+                    },
+                    enabled = pedometerInput.isNotBlank() && !pedometerSaved
+                )
+            }
+            if (pedometerSaved) {
+                Text("✓ Step count updated", color = Inv.Gold, fontSize = 12.sp)
+            }
+        }
 
         // ── Steps card ──
         InvCard(goldBorder = true) {
@@ -424,6 +487,7 @@ private suspend fun loadHistory(dao: TrainingDao, onResult: (List<DailyStepRecor
 }
 
 private suspend fun refreshHealthSteps(
+    context: Context,
     client: HealthConnectClient?,
     permission: String,
     dao: TrainingDao,
@@ -449,6 +513,8 @@ private suspend fun refreshHealthSteps(
         onSteps(count)
         // Persist to Room
         dao.upsertSteps(DailyStepRecord(today.toString(), count, "Health Connect"))
+        // Refresh home screen widget with latest steps
+        try { StepWidget.refreshAll(context) } catch (_: Exception) {}
     } catch (exception: Exception) {
         onError("Couldn't read Health Connect steps: ${exception.message ?: "unknown error"}")
     }

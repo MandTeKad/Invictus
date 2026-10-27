@@ -227,7 +227,7 @@ private fun InvictusMainScaffold(dao: TrainingDao, campaignDao: CampaignDao) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("INVICTUS", color = Inv.Gold, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
                 Spacer(Modifier.weight(1f))
-                Text("v0.2.0", color = Inv.TextTertiary, fontSize = 12.sp)
+                Text("v0.2.1", color = Inv.TextTertiary, fontSize = 12.sp)
             }
 
             when (tab) {
