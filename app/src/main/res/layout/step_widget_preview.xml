@@ -1,38 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Static preview layout shown in the widget picker -->
+<!-- Static preview layout shown in the widget picker (full dashboard) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#0D0D0D"
-    android:gravity="center_vertical"
+    android:gravity="center"
     android:orientation="horizontal"
     android:padding="12dp">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="🏛"
-        android:textSize="24sp" />
+    <!-- Left: ring placeholder -->
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:gravity="center">
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="0\nsteps"
+            android:textColor="#D4AF37"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:gravity="center" />
+    </FrameLayout>
+
+    <!-- Right: stats placeholder -->
     <LinearLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:gravity="center"
         android:orientation="vertical">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="0"
+            android:text="INVICTUS"
             android:textColor="#D4AF37"
-            android:textSize="28sp"
+            android:textSize="14sp"
             android:textStyle="bold" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="STEPS TODAY"
+            android:text="Step Tracker"
             android:textColor="#999999"
-            android:textSize="11sp" />
+            android:textSize="11sp"
+            android:layout_marginTop="4dp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0.0 mi"
+                android:textColor="#EEEEEE"
+                android:textSize="11sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="  ·  0 Kcal"
+                android:textColor="#EEEEEE"
+                android:textSize="11sp" />
+        </LinearLayout>
     </LinearLayout>
 </LinearLayout>
