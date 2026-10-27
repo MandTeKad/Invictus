@@ -231,7 +231,7 @@ private fun InvictusMainScaffold(dao: TrainingDao, campaignDao: CampaignDao) {
             }
 
             when (tab) {
-                0 -> CommandScreen(sets, weights, recoveries, sessions, onTrain = { tab = 2 })
+                0 -> CommandScreen(sets, weights, recoveries, sessions, onTrain = { tab = 2 }, onSteps = { tab = 5 })
                 1 -> {
                     if (selectedGoalId != null) {
                         GoalDetailScreen(
@@ -264,6 +264,7 @@ private fun InvictusMainScaffold(dao: TrainingDao, campaignDao: CampaignDao) {
                 )
                 3 -> RecordsScreen(sets, weights, dao, scope)
                 4 -> RecoveryScreen(recoveries, dao, scope)
+                5 -> ActivityTrackingScreen(weights.firstOrNull()?.pounds ?: 287.0, dao)
             }
         }
     }
@@ -277,7 +278,8 @@ private fun CommandScreen(
     weights: List<WeightEntry>,
     recoveries: List<RecoveryEntry>,
     sessions: List<WorkoutSession>,
-    onTrain: () -> Unit
+    onTrain: () -> Unit,
+    onSteps: () -> Unit
 ) {
     ScreenTitle("Command", "Your training, today")
 
@@ -346,6 +348,13 @@ private fun CommandScreen(
             CardLabel("Weight Trend")
             WeightTrendChart(weights.take(14).reversed())
         }
+    }
+
+    InvCard {
+        CardLabel("Daily Movement")
+        Text("Track steps via Health Connect or foreground sensor",
+            color = Inv.TextSecondary, fontSize = 13.sp)
+        InvOutlinedButton(text = "Open Step Tracker", onClick = onSteps)
     }
 }
 
